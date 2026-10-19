@@ -13,20 +13,23 @@ import {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function makeGuard(overrides = {}) {
+async function makeGuard(overrides = {}, deps = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "agy-guard-test-"));
-  return new RequestGuard({
-    statePath: path.join(directory, "state.json"),
-    minIntervalMs: 0,
-    jitterMs: 0,
-    windowMs: 60_000,
-    maxPerWindow: 100,
-    breakerThreshold: 0,
-    breakerCooldownMs: 120,
-    dailyCap: 100,
-    queueTimeoutMs: 5_000,
-    ...overrides,
-  });
+  return new RequestGuard(
+    {
+      statePath: path.join(directory, "state.json"),
+      minIntervalMs: 0,
+      jitterMs: 0,
+      windowMs: 60_000,
+      maxPerWindow: 100,
+      breakerThreshold: 0,
+      breakerCooldownMs: 120,
+      dailyCap: 100,
+      queueTimeoutMs: 5_000,
+      ...overrides,
+    },
+    deps,
+  );
 }
 
 test("serializes concurrent turns and preserves FIFO order", async () => {
@@ -108,10 +111,14 @@ test("enforces the daily cap", async () => {
 });
 
 test("opens the breaker after repeated errors and recovers with a half-open probe", async () => {
-  const guard = await makeGuard({
-    breakerThreshold: 2,
-    breakerCooldownMs: 120,
-  });
+  let now = 1_000_000;
+  const guard = await makeGuard(
+    {
+      breakerThreshold: 2,
+      breakerCooldownMs: 120,
+    },
+    { now: () => now },
+  );
 
   const fail = () => guard.run(undefined, async () => {
     throw new Error("ordinary failure");
@@ -126,7 +133,7 @@ test("opens the breaker after repeated errors and recovers with a half-open prob
       error instanceof GuardError && error.code === "AGY_GUARD_BREAKER",
   );
 
-  await sleep(140);
+  now += 140;
 
   const result = await guard.run(undefined, async () => "probe ok");
   assert.equal(result, "probe ok");
@@ -137,7 +144,11 @@ test("opens the breaker after repeated errors and recovers with a half-open prob
 });
 
 test("a rate-limit failure trips the breaker immediately", async () => {
-  const guard = await makeGuard({ breakerThreshold: 99 });
+  let now = 1_000_000;
+  const guard = await makeGuard(
+    { breakerThreshold: 99, breakerCooldownMs: 120 },
+    { now: () => now },
+  );
 
   await assert.rejects(
     () =>
