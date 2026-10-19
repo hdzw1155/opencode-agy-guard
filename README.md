@@ -5,13 +5,24 @@
 
 把本机 `agy`（Google Antigravity CLI）接入 OpenCode V2：底座来自 `dsh-agy-safe` 的 agy CLI 接入方式，核心是**作者独立设计的限流器**（与 4–5 个 AI 协作实现）。
 
-> **English:** A local OpenCode V2 plugin that exposes your own `agy` CLI as a helper tool. The agy CLI adapter is based on `dsh-agy-safe`; the rate limiter is the author's original design, built in collaboration with several AIs. Not a model provider, and not affiliated with Google, Antigravity, or OpenCode. Built with AI assistance; review the code before trusting it. Use at your own risk.
+> **这是一个工具插件，不是模型提供商**：主模型不变，需要时由主模型调用 `agy` 工具把任务交给本机 agy。agy 的模型不会出现在 OpenCode 的「管理模型」列表里；想让它出现在模型选择器，需要另外实现 provider 桥。
+
+> **English:** A local OpenCode V2 tool plugin that exposes your own `agy` CLI as a helper tool. The agy CLI adapter is based on `dsh-agy-safe`; the rate limiter is the author's original design, built in collaboration with several AIs. This is a tool plugin, not a model provider: agy models do not appear in OpenCode's model picker. Not affiliated with Google, Antigravity, or OpenCode. Built with AI assistance; review the code before trusting it. Use at your own risk.
 
 > **免责声明：** 非官方项目，与 Google / Antigravity / OpenCode 均无关。它只调用你本机安装的 `agy`，不代替登录、不绕过配额和风控，也不代理或转售 Google AI 服务——每个使用者运行自己的 `agy` 和自己的账号。你需要自己的可用账号和网络环境，并自行承担 Google 服务条款、账号风控与本机权限风险。默认 `yolo: true` 会传 `--dangerously-skip-permissions`，agy 能读写 `dir` 里的文件、执行命令；建议只做只读或低风险任务。限流器降低频率风险，但不构成任何账号安全保证。
 
 > **AI 声明：** 本项目由人类提出需求、定义边界、设计限流规则并做最终验收；代码、测试和文档主要由 AI（OpenCode 智能体 / DeepSeek V4.1 Flash）编写。限流器的方案来自作者本人，AI 负责协助实现与测试。请在依赖它之前自行审阅代码，重点看 `src/guard.js`（限流逻辑）和 `src/runner.js`（怎么调用 agy）。
 
-它**不是**模型提供商：不会出现在 OpenCode 的模型选择器里。它注册 `agy` / `agy_status` 两个工具和 `/agy`、`/agy-status` 两个命令，让主模型或子代理按需把任务交给本机 `agy`。
+## 先搞清楚：工具插件 vs 模型提供商
+
+| | 工具插件（本项目） | 模型提供商（不是本项目） |
+| --- | --- | --- |
+| 模型选择器 | 不出现 | agy 的模型会出现在列表里 |
+| 谁在回答 | 主模型不变；它按需调用 `agy` 工具 | 选中后整个对话由 agy 生成 |
+| 工具历史 | OpenCode 工具照常工作 | 现有 V1 桥会丢失工具历史 |
+| 本项目形态 | `agy` / `agy_status` 两个工具 + `/agy`、`/agy-status` 两个命令 | 需要额外的 provider 桥，尚未实现 |
+
+一句话：**agy 是主模型手下的一个“外援工具”，不是替换主模型。**
 
 ## 这个项目的构成
 
