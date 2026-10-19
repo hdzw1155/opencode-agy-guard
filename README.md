@@ -151,3 +151,11 @@ node --test
 ```
 
 测试覆盖串行化、最小间隔、滑动窗口、每日上限、熔断/半开、排队取消、状态持久化、超时/传输重试、状态工具与重置、模型同步/解析、参数构建、NDJSON 解析和工具注册。
+
+## 相关项目 / 致谢
+
+- **CLI 调用方式**参考 [Jonah-Wu23/dsh-agy-safe](https://github.com/Jonah-Wu23/dsh-agy-safe)（MIT）：`stream-json` 输入输出、NDJSON 事件解析、host tool 协议的思路来自它。
+- **限流器（guard）不是 dsh-agy-safe 上游的功能**，而是作者此前自用的 DSH guard 补丁（由作者与 AI 协作编写）的重写与修正版；本项目修掉了半开探测泄漏、UTC 日期、非原子写入等问题。
+- **OpenCode V2 的“工具 + 命令”注册写法**参考 [chigarow/antigravity-for-opencode](https://github.com/chigarow/antigravity-for-opencode)（MIT）。
+- 其他同类项目：OAuth provider 路线（[NoeFabris/opencode-antigravity-auth](https://github.com/NoeFabris/opencode-antigravity-auth)、[shekohex/opencode-google-antigravity-auth](https://github.com/shekohex/opencode-google-antigravity-auth)）、provider bridge 路线（[raultov/opencode-agy-bridge](https://github.com/raultov/opencode-agy-bridge)、[berndof/opencode-agy-bridge](https://github.com/berndof/opencode-agy-bridge)）、本地 HTTP 桥（[batteryshark/opencode-agy](https://github.com/batteryshark/opencode-agy)）、subagent/skill 委派（[DanielHetz/opencode-agy-delegate](https://github.com/DanielHetz/opencode-agy-delegate)、[kazimshah39/opencode-agy-subagent](https://github.com/kazimshah39/opencode-agy-subagent)）、多账号管理（[zcop/agy-cli-manager](https://github.com/zcop/agy-cli-manager)）。本项目只做单账号的本地工具 + 限流，和它们不冲突。
+- 本项目是独立实现，不是 fork，没有从上述项目复制粘贴代码；[zyekhabdul/agy-guard](https://github.com/zyekhabdul/agy-guard) 是同名但无关的 Python 项目。
