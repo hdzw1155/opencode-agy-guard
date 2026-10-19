@@ -4,7 +4,7 @@ OpenCode V2 的本地 `agy` 助手，按 `dsh-agy-safe` 的 CLI 方式工作，�
 
 > **English:** A local OpenCode V2 plugin that exposes your own `agy` CLI as a helper tool, with a polite rate limiter (1 concurrent, ≥1.5s spacing, 10/min, 500/day, circuit breaker). Not a provider, and not affiliated with Google, Antigravity, or OpenCode. Built with AI assistance; review the code before trusting it. Use at your own risk.
 >
-> **免责声明：** 非官方项目，与 Google / Antigravity / OpenCode 均无关。它只调用你本机安装的 `agy`，不代替登录、不绕过配额和风控。你需要自己的可用账号和网络环境，并自行承担 Google 服务条款、账号风控与本机权限风险。默认 `yolo: true` 会传 `--dangerously-skip-permissions`，agy 能读写 `dir` 里的文件、执行命令；建议只做只读或低风险任务。限流器降低频率风险，但不构成任何账号安全保证。
+> **免责声明：** 非官方项目，与 Google / Antigravity / OpenCode 均无关。它只调用你本机安装的 `agy`，不代替登录、不绕过配额和风控，也不代理或转售 Google AI 服务——每个使用者运行自己的 `agy` 和自己的账号。你需要自己的可用账号和网络环境，并自行承担 Google 服务条款、账号风控与本机权限风险。默认 `yolo: true` 会传 `--dangerously-skip-permissions`，agy 能读写 `dir` 里的文件、执行命令；建议只做只读或低风险任务。限流器降低频率风险，但不构成任何账号安全保证。
 >
 > **AI 声明：** 本项目由人类提出需求、定义边界并做最终验收；代码、测试和文档主要由 AI（OpenCode 智能体 / DeepSeek V4.1 Flash）编写。请在依赖它之前自行审阅代码，重点看 `src/runner.js`（怎么调用 agy）和 `src/guard.js`（限流逻辑）。
 
