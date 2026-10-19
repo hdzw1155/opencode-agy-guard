@@ -1,0 +1,34 @@
+{
+  "name": "opencode-agy-guard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenCode V2 agy tool/helper with an anti-ban rate limiter",
+  "license": "MIT",
+  "author": "opencode-agy-guard contributors",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "agy",
+    "antigravity",
+    "rate-limit",
+    "guard"
+  ],
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./src/index.js": "./src/index.js"
+  },
+  "files": [
+    "index.js",
+    "server.js",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
