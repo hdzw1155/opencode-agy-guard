@@ -3,30 +3,40 @@
 [![tests](https://github.com/hdzw1155/opencode-agy-guard/actions/workflows/test.yml/badge.svg)](https://github.com/hdzw1155/opencode-agy-guard/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-把本机安装的 `agy`（Google Antigravity CLI）暴露成 OpenCode V2 的本地工具，并带一层独立的调用限流器。
+把本机 `agy`（Google Antigravity CLI）接入 OpenCode V2：底座来自 `dsh-agy-safe` 的 agy CLI 接入方式，核心是**作者独立设计的限流器**（与 4–5 个 AI 协作实现）。
 
-> **English:** A local OpenCode V2 plugin that exposes your own `agy` CLI as a helper tool, with a polite rate limiter (1 concurrent, ≥1.5s spacing, 10/min, 500/day, circuit breaker). Not a model provider, and not affiliated with Google, Antigravity, or OpenCode. Built with AI assistance; review the code before trusting it. Use at your own risk.
+> **English:** A local OpenCode V2 plugin that exposes your own `agy` CLI as a helper tool. The agy CLI adapter is based on `dsh-agy-safe`; the rate limiter is the author's original design, built in collaboration with several AIs. Not a model provider, and not affiliated with Google, Antigravity, or OpenCode. Built with AI assistance; review the code before trusting it. Use at your own risk.
 
 > **免责声明：** 非官方项目，与 Google / Antigravity / OpenCode 均无关。它只调用你本机安装的 `agy`，不代替登录、不绕过配额和风控，也不代理或转售 Google AI 服务——每个使用者运行自己的 `agy` 和自己的账号。你需要自己的可用账号和网络环境，并自行承担 Google 服务条款、账号风控与本机权限风险。默认 `yolo: true` 会传 `--dangerously-skip-permissions`，agy 能读写 `dir` 里的文件、执行命令；建议只做只读或低风险任务。限流器降低频率风险，但不构成任何账号安全保证。
 
-> **AI 声明：** 本项目由人类提出需求、定义边界并做最终验收；代码、测试和文档主要由 AI（OpenCode 智能体 / DeepSeek V4.1 Flash）编写。请在依赖它之前自行审阅代码，重点看 `src/runner.js`（怎么调用 agy）和 `src/guard.js`（限流逻辑）。
+> **AI 声明：** 本项目由人类提出需求、定义边界、设计限流规则并做最终验收；代码、测试和文档主要由 AI（OpenCode 智能体 / DeepSeek V4.1 Flash）编写。限流器的方案来自作者本人，AI 负责协助实现与测试。请在依赖它之前自行审阅代码，重点看 `src/guard.js`（限流逻辑）和 `src/runner.js`（怎么调用 agy）。
 
 它**不是**模型提供商：不会出现在 OpenCode 的模型选择器里。它注册 `agy` / `agy_status` 两个工具和 `/agy`、`/agy-status` 两个命令，让主模型或子代理按需把任务交给本机 `agy`。
 
+## 这个项目的构成
+
+| 部分 | 来源 |
+| --- | --- |
+| agy CLI 接入底座（`stream-json` / NDJSON / host tool 协议思路） | **[dsh-agy-safe](https://github.com/Jonah-Wu23/dsh-agy-safe)**（MIT） |
+| **限流器设计**：1 并发、≥1.5s 间隔 + 抖动、10 次/60s 滑动窗口、500 次/日、连续失败或 429 熔断、半开探测、排队超时 | **作者原创**，与 4–5 个 AI 协作实现 |
+| OpenCode V2 工具/命令适配、模型自动同步、`agy_status`、超时/传输重试、测试与 CI | 本项目 |
+
+`dsh-agy-safe` 只提供底座，上游**没有**限流器。限流器最初是作者的 DSH 个人补丁，本项目把它移植到 OpenCode，并重写、修正了半开探测泄漏、UTC 日期、非原子写入等问题。
+
 ## 特性
 
+- **限流器（本项目核心）**：作者原创设计——进程级串行 + 最小间隔 + 滑动窗口 + 每日上限 + 熔断/半开 + 排队超时，降低触发 429 / 风控的概率。
 - **工具形态，不是 provider**：不注册模型、不接管对话、不丢工具历史；agy 只负责你交给它的那一段任务。
 - **本地 CLI**：直接调用本机 `agy` 的 headless `stream-json` 协议，不经过任何第三方 HTTP 服务。
-- **限流器**：进程级串行 + 最小间隔 + 滑动窗口 + 每日上限 + 熔断/半开，降低触发 429 / 风控的概率。
 - **模型自动同步**：启动时从 `agy models` 拉取当前模型列表，支持友好别名和原始 ID。
 - **可观测**：`agy_status` 查看状态、`reset` 清除熔断；超时/传输失败自动重试一次。
 - **零依赖**：纯 ESM JavaScript + Node 内置模块，`npm test` 即可跑测试。
 
-## 设计取舍：为什么不做成 provider
+## 底座与设计取舍
 
-`dsh-agy-safe` 的价值在于它注入宿主的工具协议，让 `agy` 通过宿主执行工具。OpenCode V2 没有等价的“进程内自定义 provider + 宿主工具回调”插件 API；现有的 `@ichisay/opencode-agy-plugin` 是 V1 的 AI SDK provider，会把 OpenCode 的工具历史丢掉，而且每次调用都跳过权限，不适合直接搬到 V2。
+`dsh-agy-safe` 提供的是 agy CLI 的接入底座。OpenCode V2 没有等价的“进程内自定义 provider + 宿主工具回调”插件 API；现有的 `@ichisay/opencode-agy-plugin` 是 V1 的 AI SDK provider，会把 OpenCode 的工具历史丢掉，而且每次调用都跳过权限，不适合直接搬到 V2。
 
-所以这里采用更窄、更可控的形态：**把 agy 当成一个独立的 helper/subagent 工具**，工具执行和权限由 OpenCode 自己负责。
+所以本项目保留底座、换成更窄的形态：**把 agy 当成一个独立的 helper/subagent 工具**，工具执行和权限由 OpenCode 自己负责，把主要精力放在作者原创的限流器和 OpenCode V2 适配上。
 
 ## 环境要求
 
@@ -96,7 +106,7 @@
 
 ## 限流器（降低风控 / 429 风险）
 
-所有调用（工具和 `/agy` 命令）都经过同一个进程级 `RequestGuard`：
+所有调用（工具和 `/agy` 命令）都经过同一个进程级 `RequestGuard`。规则全部来自作者的设计：
 
 - 同一时刻只允许 1 个 agy 进程；
 - 两次启动至少间隔 1.5 秒，再加 0–500ms 抖动；
@@ -162,7 +172,7 @@
 server.js       OpenCode V2 本地插件入口
 src/index.js    插件定义、工具与命令注册
 src/runner.js   agy 调用、参数构建、NDJSON 解析、错误分类、重试
-src/guard.js    进程级限流器
+src/guard.js    进程级限流器（作者原创设计）
 src/models.js   模型列表同步与别名
 src/env.js      传给 agy 的环境变量过滤
 test/           node --test 测试
@@ -176,13 +186,12 @@ npm test        # 等价于 node --test
 
 测试覆盖串行化、最小间隔、滑动窗口、每日上限、熔断/半开、排队取消、状态持久化、超时/传输重试、状态工具与重置、模型同步/解析、参数构建、NDJSON 解析和工具注册。
 
-## 相关项目 / 致谢
+## 底座与致谢
 
-### 致谢
-
-- [Jonah-Wu23/dsh-agy-safe](https://github.com/Jonah-Wu23/dsh-agy-safe)（MIT）——`stream-json` / NDJSON / host tool 协议的思路来源。
-- 作者自用的 DSH guard 补丁——限流器的原始版本，由作者与 AI 协作编写，**未包含在 dsh-agy-safe 上游**；本项目的 `guard.js` 是它的重写与修正版（修掉了半开探测泄漏、UTC 日期、非原子写入等问题）。
-- [chigarow/antigravity-for-opencode](https://github.com/chigarow/antigravity-for-opencode)（MIT）——OpenCode V2“工具 + 命令”注册写法的参考。
+- **底座**：[Jonah-Wu23/dsh-agy-safe](https://github.com/Jonah-Wu23/dsh-agy-safe)（MIT）——agy CLI 接入方式、`stream-json` / NDJSON / host tool 协议思路。它只提供底座，上游没有限流器。
+- **限流器（本项目核心）**：由作者原创设计，并与 4–5 个 AI 协作编写。1 并发、最小间隔 + 抖动、滑动窗口、每日上限、熔断/半开、排队超时等全部规则都来自作者的方案。最初用于作者的 DSH 个人补丁，本项目移植到 OpenCode 并做了修正与重写。
+- **OpenCode V2 注册写法**：参考 [chigarow/antigravity-for-opencode](https://github.com/chigarow/antigravity-for-opencode)（MIT）。
+- 本项目不是 fork，没有从上述项目复制粘贴代码。
 
 ### 同类项目
 
@@ -191,11 +200,11 @@ npm test        # 等价于 node --test
 | OAuth provider | [NoeFabris/opencode-antigravity-auth](https://github.com/NoeFabris/opencode-antigravity-auth)、[shekohex/opencode-google-antigravity-auth](https://github.com/shekohex/opencode-google-antigravity-auth) | 登录后直接消耗 Antigravity 配额，支持多账号轮换；本项目只用本机已登录的 `agy` CLI |
 | Provider bridge | [raultov/opencode-agy-bridge](https://github.com/raultov/opencode-agy-bridge)、[berndof/opencode-agy-bridge](https://github.com/berndof/opencode-agy-bridge) | 把 agy 当成模型路由；本项目不注册模型，避免工具历史丢失 |
 | 本地 HTTP 桥 | [batteryshark/opencode-agy](https://github.com/batteryshark/opencode-agy) | 需要额外维护一个 HTTP 服务；本项目只做本地 CLI 工具 |
-| 委派 / 子代理 | [chigarow/antigravity-for-opencode](https://github.com/chigarow/antigravity-for-opencode)、[DanielHetz/opencode-agy-delegate](https://github.com/DanielHetz/opencode-agy-delegate)、[kazimshah39/opencode-agy-subagent](https://github.com/kazimshah39/opencode-agy-subagent)、[louisfghbvc/opencode-agy-skill](https://github.com/louisfghbvc/opencode-agy-skill) | 形态最接近；本项目走 `stream-json` 并带独立限流器 |
+| 委派 / 子代理 | [chigarow/antigravity-for-opencode](https://github.com/chigarow/antigravity-for-opencode)、[DanielHetz/opencode-agy-delegate](https://github.com/DanielHetz/opencode-agy-delegate)、[kazimshah39/opencode-agy-subagent](https://github.com/kazimshah39/opencode-agy-subagent)、[louisfghbvc/opencode-agy-skill](https://github.com/louisfghbvc/opencode-agy-skill) | 形态最接近；本项目走 `stream-json`，并带作者原创的限流器 |
 | 多账号 / 配额管理 | [zcop/agy-cli-manager](https://github.com/zcop/agy-cli-manager) | 管账号和配额；本项目管单账号的调用频率，可以配合使用 |
 | 同名但无关 | [zyekhabdul/agy-guard](https://github.com/zyekhabdul/agy-guard) | Python 项目，和本仓库没有关系 |
 
-本项目是独立实现，不是 fork，没有从上述项目复制粘贴代码。
+本项目是独立实现，不是 fork；底座思路来自 `dsh-agy-safe`，限流器为作者原创，其余为本项目自行实现。
 
 ## License
 
