@@ -3,9 +3,11 @@
 [![tests](https://github.com/hdzw1155/opencode-agy-guard/actions/workflows/test.yml/badge.svg)](https://github.com/hdzw1155/opencode-agy-guard/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-把本机 `agy`（Google Antigravity CLI）接入 OpenCode V2：底座来自 `dsh-agy-safe` 的 agy CLI 接入方式，核心是**作者独立设计的限流器**（与 4–5 个 AI 协作实现）。
+把本机 `agy`（Google Antigravity CLI）接入 OpenCode V2：底座来自 `dsh-agy-safe` 的 agy CLI 接入方式，核心是**作者独立设计的跨进程限流器**（与 4–5 个 AI 协作实现）。
 
 > **这是一个工具插件，不是模型提供商**：主模型不变，需要时由主模型调用 `agy` 工具把任务交给本机 agy。agy 的模型不会出现在 OpenCode 的「管理模型」列表里；想让它出现在模型选择器，需要另外实现 provider 桥。
+
+> **搜「agy 封号」「Antigravity 429」「OpenCode 并发」找到这里？** 直接看下面的「限流器」一节和 guard 配置。如果你正被 429 / 风控困扰，先把间隔、每日上限和队列上限调保守。
 
 > **English:** A local OpenCode V2 tool plugin that exposes your own `agy` CLI as a helper tool. The agy CLI adapter is based on `dsh-agy-safe`; the rate limiter is the author's original design, built in collaboration with several AIs. This is a tool plugin, not a model provider: agy models do not appear in OpenCode's model picker. Not affiliated with Google, Antigravity, or OpenCode. Built with AI assistance; review the code before trusting it. Use at your own risk.
 
@@ -36,7 +38,7 @@
 
 ## 特性
 
-- **限流器（本项目核心）**：作者原创设计——进程级串行 + 最小间隔 + 滑动窗口 + 每日上限 + 熔断/半开 + 排队超时，降低触发 429 / 风控的概率。
+- **限流器（本项目核心）**：作者原创设计——跨进程全局串行（文件锁）+ 有界等待队列 + 最小间隔 + 滑动窗口 + 每日上限 + 熔断/半开 + 排队超时，降低触发 429 / 风控的概率。
 - **工具形态，不是 provider**：不注册模型、不接管对话、不丢工具历史；agy 只负责你交给它的那一段任务。
 - **本地 CLI**：直接调用本机 `agy` 的 headless `stream-json` 协议，不经过任何第三方 HTTP 服务。
 - **模型自动同步**：启动时从 `agy models` 拉取当前模型列表，支持友好别名和原始 ID。
@@ -117,9 +119,10 @@
 
 ## 限流器（降低风控 / 429 风险）
 
-所有调用（工具和 `/agy` 命令）都经过同一个进程级 `RequestGuard`。规则全部来自作者的设计：
+所有调用（工具和 `/agy` 命令）都经过 `RequestGuard`。规则全部来自作者的设计：
 
-- 同一时刻只允许 1 个 agy 进程；
+- **跨进程全局串行**：同一份状态文件下，Desktop、TUI、多个终端同时只有一个 agy 进程在跑；锁目录是 `<statePath>.lock`，持有者每 30 秒刷新心跳，崩溃后 2 分钟可被接管；
+- 同一 OpenCode 进程内还有一层 FIFO 队列；本地等待队列最多 4 个，满了直接拒绝（`AGY_GUARD_QUEUE_FULL`），不无限堆积；
 - 两次启动至少间隔 1.5 秒，再加 0–500ms 抖动；
 - 60 秒滑动窗口最多 10 次启动；
 - 每天最多 500 次，按**本地日期**重置；
@@ -127,11 +130,15 @@
 - 熔断结束后只放一个半开探测，成功才恢复；
 - 排队超过 120 秒会失败，不会无限堆积。
 
+> 跨进程锁只协调**共享同一个 `AGY_GUARD_STATE`** 的进程。如果不同 OpenCode 配置用了不同状态文件，它们彼此看不见；想全局串行，就让所有实例指向同一个状态文件。
+
 状态保存在：
 
 ```text
 %USERPROFILE%\.local\share\opencode\agy-guard-state.json
 ```
+
+锁目录：`%USERPROFILE%\.local\share\opencode\agy-guard-state.json.lock`。
 
 环境变量可覆盖：
 
@@ -147,6 +154,11 @@
 | `AGY_GUARD_BREAKER_COOLDOWN_MS` | `300000` |
 | `AGY_GUARD_DAILY_CAP` | `500` |
 | `AGY_GUARD_QUEUE_TIMEOUT_MS` | `120000` |
+| `AGY_GUARD_CROSS_PROCESS` | `true` |
+| `AGY_GUARD_MAX_QUEUE` | `4` |
+| `AGY_GUARD_LOCK_STALE_MS` | `120000` |
+| `AGY_GUARD_LOCK_POLL_MS` | `250` |
+| `AGY_GUARD_LOCK_HEARTBEAT_MS` | `30000` |
 
 ## 失败重试
 
@@ -183,10 +195,12 @@
 server.js       OpenCode V2 本地插件入口
 src/index.js    插件定义、工具与命令注册
 src/runner.js   agy 调用、参数构建、NDJSON 解析、错误分类、重试
-src/guard.js    进程级限流器（作者原创设计）
+src/guard.js    跨进程限流器（作者原创设计）
+src/lock.js     跨进程文件锁：原子 mkdir、心跳、超时接管
+src/util.js     共享错误与可取消 sleep
 src/models.js   模型列表同步与别名
 src/env.js      传给 agy 的环境变量过滤
-test/           node --test 测试
+test/           node --test 测试（含锁与跨进程队列）
 ```
 
 ## 开发与测试
@@ -195,7 +209,7 @@ test/           node --test 测试
 npm test        # 等价于 node --test
 ```
 
-测试覆盖串行化、最小间隔、滑动窗口、每日上限、熔断/半开、排队取消、状态持久化、超时/传输重试、状态工具与重置、模型同步/解析、参数构建、NDJSON 解析和工具注册。
+测试覆盖进程内 FIFO、跨进程文件锁、队列上限、共享状态、最小间隔、滑动窗口、每日上限、熔断/半开、排队取消、状态持久化、超时/传输重试、状态工具与重置、模型同步/解析、参数构建、NDJSON 解析和工具注册。
 
 ## 底座与致谢
 

@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { FileLock, lockPathForStatePath } from "./lock.js";
+import { GuardError, abortError, abortableSleep } from "./util.js";
+
+export { GuardError };
+
 /**
  * Default guard state path. Kept under OpenCode's local data directory so the
  * daily cap and circuit breaker survive terminal/desktop restarts.
@@ -25,17 +30,12 @@ const DEFAULT_CONFIG = Object.freeze({
   breakerCooldownMs: 300_000,
   dailyCap: 500,
   queueTimeoutMs: 120_000,
+  crossProcess: true,
+  maxQueueDepth: 4,
+  lockStaleMs: 120_000,
+  lockPollMs: 250,
+  lockHeartbeatMs: 30_000,
 });
-
-export class GuardError extends Error {
-  constructor(code, message, options = {}) {
-    super(message, options.cause ? { cause: options.cause } : undefined);
-    this.name = "GuardError";
-    this.code = code;
-    this.retryAfterMs = options.retryAfterMs ?? 0;
-    this.details = options.details;
-  }
-}
 
 function envBool(name, fallback) {
   const value = process.env[name];
@@ -72,6 +72,14 @@ export function guardConfigFromEnv() {
       "AGY_GUARD_QUEUE_TIMEOUT_MS",
       DEFAULT_CONFIG.queueTimeoutMs,
     ),
+    crossProcess: envBool("AGY_GUARD_CROSS_PROCESS", DEFAULT_CONFIG.crossProcess),
+    maxQueueDepth: envInt("AGY_GUARD_MAX_QUEUE", DEFAULT_CONFIG.maxQueueDepth),
+    lockStaleMs: envInt("AGY_GUARD_LOCK_STALE_MS", DEFAULT_CONFIG.lockStaleMs),
+    lockPollMs: envInt("AGY_GUARD_LOCK_POLL_MS", DEFAULT_CONFIG.lockPollMs),
+    lockHeartbeatMs: envInt(
+      "AGY_GUARD_LOCK_HEARTBEAT_MS",
+      DEFAULT_CONFIG.lockHeartbeatMs,
+    ),
   };
 }
 
@@ -80,37 +88,6 @@ export function localDate(date = new Date()) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-}
-
-function abortError(signal) {
-  const reason = signal?.reason;
-  if (reason instanceof Error) return reason;
-  const error = new GuardError("AGY_GUARD_ABORTED", "agy request aborted");
-  error.name = "AbortError";
-  return error;
-}
-
-function abortableSleep(ms, signal) {
-  if (!(ms > 0)) return Promise.resolve();
-  if (signal?.aborted) return Promise.reject(abortError(signal));
-
-  return new Promise((resolve, reject) => {
-    let timer;
-    const cleanup = () => {
-      if (timer) clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-    };
-    const onAbort = () => {
-      cleanup();
-      reject(abortError(signal));
-    };
-
-    timer = setTimeout(() => {
-      cleanup();
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 /**
@@ -224,7 +201,9 @@ export function isRateLimitText(value) {
  * Anti-ban scheduler for agy. It is deliberately a rate limiter, not a
  * security sandbox:
  *
- * - one in-flight agy process per OpenCode instance
+ * - one in-flight agy process globally per state path (cross-process file lock)
+ * - one in-flight agy process per OpenCode instance (in-process FIFO mutex)
+ * - a bounded local wait queue (rejects with AGY_GUARD_QUEUE_FULL when full)
  * - minimum spacing between starts (with jitter)
  * - sliding window cap
  * - persisted local-midnight daily cap
@@ -237,6 +216,14 @@ export class RequestGuard {
     this.random = deps.random ?? Math.random;
     this.mutex = new Mutex();
     this.statePath = this.config.statePath;
+    this.lock = this.config.crossProcess
+      ? new FileLock({
+          lockPath: lockPathForStatePath(this.statePath),
+          staleMs: this.config.lockStaleMs,
+          pollMs: this.config.lockPollMs,
+          heartbeatMs: this.config.lockHeartbeatMs,
+        })
+      : null;
     this.state = this.emptyState();
     this.ready = this.load().catch(() => {
       this.state = this.emptyState();
@@ -478,9 +465,22 @@ export class RequestGuard {
     await this.save();
   }
 
+  /** Number of callers waiting on the in-process FIFO mutex. */
+  activeQueueDepth() {
+    return this.mutex.queue.filter((entry) => !entry.settled).length;
+  }
+
+  remainingQueueMs(deadline) {
+    if (!(this.config.queueTimeoutMs > 0)) return 0;
+    return Math.max(1, deadline - Date.now());
+  }
+
   /**
-   * Run one entire agy turn under the guard. The lock is held for the whole
-   * turn, so title/compaction/subagent calls cannot stampede the account.
+   * Run one entire agy turn under the guard. Local waiters queue on the
+   * in-process FIFO mutex; the winner then takes the cross-process file lock,
+   * reloads the shared state and only then starts pacing. The lock is held for
+   * the whole turn, so title/compaction/subagent calls from any OpenCode
+   * process cannot stampede the account.
    */
   async run(signal, start) {
     if (signal?.aborted) throw abortError(signal);
@@ -491,13 +491,36 @@ export class RequestGuard {
       return start();
     }
 
+    if (
+      this.config.maxQueueDepth > 0 &&
+      this.activeQueueDepth() >= this.config.maxQueueDepth
+    ) {
+      throw new GuardError(
+        "AGY_GUARD_QUEUE_FULL",
+        `agy guard queue is full (${this.config.maxQueueDepth}); retry later`,
+        { retryAfterMs: 5_000 },
+      );
+    }
+
+    const deadline = Date.now() + Math.max(this.config.queueTimeoutMs, 0);
     const release = await this.mutex.acquire(
       signal,
       this.config.queueTimeoutMs,
     );
+    let releaseLock = null;
     let admitted = false;
 
     try {
+      if (this.lock) {
+        releaseLock = await this.lock.acquire(
+          signal,
+          this.remainingQueueMs(deadline),
+        );
+      }
+
+      // Reload while holding the global lock so the daily cap, the sliding
+      // window and the breaker are shared across OpenCode processes.
+      await this.load();
       await this.admitOrThrow();
       await this.waitForWindow(signal);
       await this.waitForPacing(signal);
@@ -516,6 +539,7 @@ export class RequestGuard {
       }
       throw error;
     } finally {
+      if (releaseLock) await releaseLock();
       release();
     }
   }
@@ -526,7 +550,10 @@ export class RequestGuard {
       enabled: this.config.enabled,
       statePath: this.statePath,
       date: this.state.date,
-      queueDepth: this.mutex.queue.length,
+      queueDepth: this.activeQueueDepth(),
+      queueCap: this.config.maxQueueDepth,
+      crossProcess: Boolean(this.lock),
+      lockPath: this.lock?.lockPath,
       windowCount: this.state.windowStarts.length,
       windowCap: this.config.maxPerWindow,
       minIntervalMs: this.config.minIntervalMs,
@@ -539,10 +566,23 @@ export class RequestGuard {
   }
 
   async resetBreaker() {
-    this.state.breakerOpenUntil = 0;
-    this.state.errorStreak = 0;
-    this.state.halfOpenProbe = false;
-    await this.save();
+    let releaseLock = null;
+    try {
+      if (this.lock) releaseLock = await this.lock.acquire(undefined, 5_000);
+    } catch {
+      // Best effort: another process may be mid-turn. Reset in memory anyway;
+      // that turn's outcome will reconcile the shared file.
+    }
+
+    try {
+      await this.load();
+      this.state.breakerOpenUntil = 0;
+      this.state.errorStreak = 0;
+      this.state.halfOpenProbe = false;
+      await this.save();
+    } finally {
+      if (releaseLock) await releaseLock();
+    }
   }
 }
 

@@ -75,7 +75,7 @@ Use this for a second opinion, a large read-only analysis, or when OpenCode's ma
 
 Models are synced from \`agy models\` on startup and refreshed in the background; exact new model ids can be passed with the \`model\` parameter.
 
-Calls are serialized by a local anti-ban guard: one in-flight turn, minimum spacing, a sliding window, a daily cap, and a circuit breaker on 429/quota errors.`;
+Calls go through a local anti-ban guard shared across OpenCode processes: one in-flight agy turn globally (cross-process file lock plus a bounded FIFO queue), minimum spacing, a sliding window, a daily cap, and a circuit breaker on 429/quota errors.`;
 
 function getSignal(context) {
   const signal = context?.signal;
@@ -218,7 +218,7 @@ export function createStatusTool({ guard = globalGuard } = {}) {
           action === "reset" ? " (breaker reset)" : ""
         }`,
         `breaker: ${breaker}`,
-        `queue: ${snapshot.queueDepth}`,
+        `queue: ${snapshot.queueDepth}/${snapshot.queueCap} (${snapshot.crossProcess ? "cross-process lock" : "in-process only"})`,
         `window: ${snapshot.windowCount}/${snapshot.windowCap} starts (min interval ${snapshot.minIntervalMs}ms)`,
         `daily: ${snapshot.dailyCount}/${snapshot.dailyCap} on ${snapshot.date}`,
         `error streak: ${snapshot.errorStreak}`,
